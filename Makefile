@@ -11,8 +11,14 @@ RIOTBASE ?= $(CURDIR)/../..
 # NOTE: 6LoWPAN will be included if IEEE802.15.4 devices are present
 USEMODULE += netdev_default
 USEMODULE += auto_init_gnrc_netif
-# Specify the mandatory networking modules for IPv6
-USEMODULE += gnrc_ipv6_default
+# Specify the mandatory networking module for a IPv6 routing node
+USEMODULE += gnrc_ipv6_router_default
+# Add a routing protocol
+USEMODULE += gnrc_rpl
+USEMODULE += auto_init_gnrc_rpl
+USEMODULE += netstats_l2
+USEMODULE += netstats_ipv6
+USEMODULE += netstats_rpl
 # Include MQTT-SN
 USEMODULE += emcute
 # Add also the shell, some shell commands
