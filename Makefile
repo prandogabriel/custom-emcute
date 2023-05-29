@@ -21,6 +21,12 @@ USEMODULE += netstats_ipv6
 USEMODULE += netstats_rpl
 # Include MQTT-SN
 USEMODULE += emcute
+
+# Include UDP
+USEMODULE += posix_sockets
+USEMODULE += sock_udp
+USEMODULE += posix_sleep
+USEMODULE += posix_inet
 # Add also the shell, some shell commands
 USEMODULE += shell
 USEMODULE += shell_cmds_default

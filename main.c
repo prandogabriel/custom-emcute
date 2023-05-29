@@ -29,13 +29,35 @@
 #include "net/ipv6/addr.h"
 #include "thread.h"
 
-#ifndef EMCUTE_ID
-#define EMCUTE_ID           ("gertrud")
-#endif
-#define EMCUTE_PRIO         (THREAD_PRIORITY_MAIN - 1)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
-#define NUMOFSUBS           (16U)
-#define TOPIC_MAXLEN        (64U)
+#include "net/netif.h" /* for resolving ipv6 scope */
+
+#ifndef EMCUTE_ID
+#define EMCUTE_ID ("gertrud")
+#endif
+
+#ifndef CLIENT_SERVER_PORT
+#define CLIENT_SERVER_PORT (1234U)
+#endif
+#define EMCUTE_PRIO (THREAD_PRIORITY_MAIN - 1)
+
+#define NUMOFSUBS (16U)
+#define TOPIC_MAXLEN (64U)
+
+#define SERVER_MSG_QUEUE_SIZE   (8)
+#define CLIENT_SERVER_BUFFER_SIZE      (64)
+
+
+static char client_server_buffer[CLIENT_SERVER_BUFFER_SIZE];
+static msg_t client_server_msg_queue[SERVER_MSG_QUEUE_SIZE];
+//static kernel_pid_t client_server_pid;
+static int client_server_socket;
+
+static char client_server_stack[THREAD_STACKSIZE_DEFAULT];
 
 static char stack[THREAD_STACKSIZE_DEFAULT];
 static msg_t queue[8];
@@ -47,7 +69,7 @@ static void *emcute_thread(void *arg)
 {
     (void)arg;
     emcute_run(CONFIG_EMCUTE_DEFAULT_PORT, EMCUTE_ID);
-    return NULL;    /* should never be reached */
+    return NULL; /* should never be reached */
 }
 
 static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
@@ -56,7 +78,8 @@ static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
 
     printf("### got publication for topic '%s' [%i] ###\n",
            topic->name, (int)topic->id);
-    for (size_t i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++)
+    {
         printf("%c", in[i]);
     }
     puts("");
@@ -65,42 +88,51 @@ static void on_pub(const emcute_topic_t *topic, void *data, size_t len)
 static unsigned get_qos(const char *str)
 {
     int qos = atoi(str);
-    switch (qos) {
-        case 1:     return EMCUTE_QOS_1;
-        case 2:     return EMCUTE_QOS_2;
-        default:    return EMCUTE_QOS_0;
+    switch (qos)
+    {
+    case 1:
+        return EMCUTE_QOS_1;
+    case 2:
+        return EMCUTE_QOS_2;
+    default:
+        return EMCUTE_QOS_0;
     }
 }
 
 static int cmd_con(int argc, char **argv)
 {
-    sock_udp_ep_t gw = { .family = AF_INET6, .port = CONFIG_EMCUTE_DEFAULT_PORT };
+    sock_udp_ep_t gw = {.family = AF_INET6, .port = CONFIG_EMCUTE_DEFAULT_PORT};
     char *topic = NULL;
     char *message = NULL;
     size_t len = 0;
 
-    if (argc < 2) {
+    if (argc < 2)
+    {
         printf("usage: %s <ipv6 addr> [port] [<will topic> <will message>]\n",
-                argv[0]);
+               argv[0]);
         return 1;
     }
 
     /* parse address */
-    if (ipv6_addr_from_str((ipv6_addr_t *)&gw.addr.ipv6, argv[1]) == NULL) {
+    if (ipv6_addr_from_str((ipv6_addr_t *)&gw.addr.ipv6, argv[1]) == NULL)
+    {
         printf("error parsing IPv6 address\n");
         return 1;
     }
 
-    if (argc >= 3) {
+    if (argc >= 3)
+    {
         gw.port = atoi(argv[2]);
     }
-    if (argc >= 5) {
+    if (argc >= 5)
+    {
         topic = argv[3];
         message = argv[4];
         len = strlen(message);
     }
 
-    if (emcute_con(&gw, true, topic, message, len, 0) != EMCUTE_OK) {
+    if (emcute_con(&gw, true, topic, message, len, 0) != EMCUTE_OK)
+    {
         printf("error: unable to connect to [%s]:%i\n", argv[1], (int)gw.port);
         return 1;
     }
@@ -116,11 +148,13 @@ static int cmd_discon(int argc, char **argv)
     (void)argv;
 
     int res = emcute_discon();
-    if (res == EMCUTE_NOGW) {
+    if (res == EMCUTE_NOGW)
+    {
         puts("error: not connected to any broker");
         return 1;
     }
-    else if (res != EMCUTE_OK) {
+    else if (res != EMCUTE_OK)
+    {
         puts("error: unable to disconnect");
         return 1;
     }
@@ -133,13 +167,15 @@ static int cmd_pub(int argc, char **argv)
     emcute_topic_t t;
     unsigned flags = EMCUTE_QOS_0;
 
-    if (argc < 3) {
+    if (argc < 3)
+    {
         printf("usage: %s <topic name> <data> [QoS level]\n", argv[0]);
         return 1;
     }
 
     /* parse QoS level */
-    if (argc >= 4) {
+    if (argc >= 4)
+    {
         flags |= get_qos(argv[3]);
     }
 
@@ -147,20 +183,22 @@ static int cmd_pub(int argc, char **argv)
 
     /* step 1: get topic id */
     t.name = argv[1];
-    if (emcute_reg(&t) != EMCUTE_OK) {
+    if (emcute_reg(&t) != EMCUTE_OK)
+    {
         puts("error: unable to obtain topic ID");
         return 1;
     }
 
     /* step 2: publish data */
-    if (emcute_pub(&t, argv[2], strlen(argv[2]), flags) != EMCUTE_OK) {
+    if (emcute_pub(&t, argv[2], strlen(argv[2]), flags) != EMCUTE_OK)
+    {
         printf("error: unable to publish data to topic '%s [%i]'\n",
-                t.name, (int)t.id);
+               t.name, (int)t.id);
         return 1;
     }
 
     printf("Published %i bytes to topic '%s [%i]'\n",
-            (int)strlen(argv[2]), t.name, t.id);
+           (int)strlen(argv[2]), t.name, t.id);
 
     return 0;
 }
@@ -169,23 +207,29 @@ static int cmd_sub(int argc, char **argv)
 {
     unsigned flags = EMCUTE_QOS_0;
 
-    if (argc < 2) {
+    if (argc < 2)
+    {
         printf("usage: %s <topic name> [QoS level]\n", argv[0]);
         return 1;
     }
 
-    if (strlen(argv[1]) > TOPIC_MAXLEN) {
+    if (strlen(argv[1]) > TOPIC_MAXLEN)
+    {
         puts("error: topic name exceeds maximum possible size");
         return 1;
     }
-    if (argc >= 3) {
+    if (argc >= 3)
+    {
         flags |= get_qos(argv[2]);
     }
 
     /* find empty subscription slot */
     unsigned i = 0;
-    for (; (i < NUMOFSUBS) && (subscriptions[i].topic.id != 0); i++) {}
-    if (i == NUMOFSUBS) {
+    for (; (i < NUMOFSUBS) && (subscriptions[i].topic.id != 0); i++)
+    {
+    }
+    if (i == NUMOFSUBS)
+    {
         puts("error: no memory to store new subscriptions");
         return 1;
     }
@@ -193,7 +237,8 @@ static int cmd_sub(int argc, char **argv)
     subscriptions[i].cb = on_pub;
     strcpy(topics[i], argv[1]);
     subscriptions[i].topic.name = topics[i];
-    if (emcute_sub(&subscriptions[i], flags) != EMCUTE_OK) {
+    if (emcute_sub(&subscriptions[i], flags) != EMCUTE_OK)
+    {
         printf("error: unable to subscribe to %s\n", argv[1]);
         return 1;
     }
@@ -204,20 +249,25 @@ static int cmd_sub(int argc, char **argv)
 
 static int cmd_unsub(int argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         printf("usage %s <topic name>\n", argv[0]);
         return 1;
     }
 
     /* find subscriptions entry */
-    for (unsigned i = 0; i < NUMOFSUBS; i++) {
+    for (unsigned i = 0; i < NUMOFSUBS; i++)
+    {
         if (subscriptions[i].topic.name &&
-            (strcmp(subscriptions[i].topic.name, argv[1]) == 0)) {
-            if (emcute_unsub(&subscriptions[i]) == EMCUTE_OK) {
+            (strcmp(subscriptions[i].topic.name, argv[1]) == 0))
+        {
+            if (emcute_unsub(&subscriptions[i]) == EMCUTE_OK)
+            {
                 memset(&subscriptions[i], 0, sizeof(emcute_sub_t));
                 printf("Unsubscribed from '%s'\n", argv[1]);
             }
-            else {
+            else
+            {
                 printf("Unsubscription form '%s' failed\n", argv[1]);
             }
             return 0;
@@ -230,16 +280,19 @@ static int cmd_unsub(int argc, char **argv)
 
 static int cmd_will(int argc, char **argv)
 {
-    if (argc < 3) {
+    if (argc < 3)
+    {
         printf("usage %s <will topic name> <will message content>\n", argv[0]);
         return 1;
     }
 
-    if (emcute_willupd_topic(argv[1], 0) != EMCUTE_OK) {
+    if (emcute_willupd_topic(argv[1], 0) != EMCUTE_OK)
+    {
         puts("error: unable to update the last will topic");
         return 1;
     }
-    if (emcute_willupd_msg(argv[2], strlen(argv[2])) != EMCUTE_OK) {
+    if (emcute_willupd_msg(argv[2], strlen(argv[2])) != EMCUTE_OK)
+    {
         puts("error: unable to update the last will message");
         return 1;
     }
@@ -249,14 +302,60 @@ static int cmd_will(int argc, char **argv)
 }
 
 static const shell_command_t shell_commands[] = {
-    { "con", "connect to MQTT broker", cmd_con },
-    { "discon", "disconnect from the current broker", cmd_discon },
-    { "pub", "publish something", cmd_pub },
-    { "sub", "subscribe topic", cmd_sub },
-    { "unsub", "unsubscribe from topic", cmd_unsub },
-    { "will", "register a last will", cmd_will },
-    { NULL, NULL, NULL }
-};
+    {"con", "connect to MQTT broker", cmd_con},
+    {"discon", "disconnect from the current broker", cmd_discon},
+    {"pub", "publish something", cmd_pub},
+    {"sub", "subscribe topic", cmd_sub},
+    {"unsub", "unsubscribe from topic", cmd_unsub},
+    {"will", "register a last will", cmd_will},
+    {NULL, NULL, NULL}};
+
+static void *_client_server_thread(void *args)
+{
+    struct sockaddr_in6 server_addr;
+    uint16_t port;
+    msg_init_queue(client_server_msg_queue, SERVER_MSG_QUEUE_SIZE);
+    client_server_socket = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+    (void)args;
+    port = CLIENT_SERVER_PORT;
+    server_addr.sin6_family = AF_INET6;
+    memset(&server_addr.sin6_addr, 0, sizeof(server_addr.sin6_addr));
+    server_addr.sin6_port = htons(port);
+    if (client_server_socket < 0)
+    {
+        puts("error initializing socket");
+        client_server_socket = 0;
+        return NULL;
+    }
+    if (bind(client_server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        client_server_socket = -1;
+        puts("error binding socket");
+        return NULL;
+    }
+    printf("Success: started UDP server on port %" PRIu16 "\n", port);
+    while (1)
+    {
+        int res;
+        struct sockaddr_in6 src;
+        socklen_t src_len = sizeof(struct sockaddr_in6);
+        if ((res = recvfrom(client_server_socket, client_server_buffer, sizeof(client_server_buffer), 0,
+                            (struct sockaddr *)&src, &src_len)) < 0)
+        {
+            puts("Error on receive");
+        }
+        else if (res == 0)
+        {
+            puts("Peer did shut down");
+        }
+        else
+        {
+            printf("Received data: ");
+            puts(client_server_buffer);
+        }
+    }
+    return NULL;
+}
 
 int main(void)
 {
@@ -274,7 +373,15 @@ int main(void)
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
 
+    /* start server (which means registering pktdump for the chosen port) */
+    if (thread_create(client_server_stack, sizeof(client_server_stack), THREAD_PRIORITY_MAIN - 1,
+                      THREAD_CREATE_STACKTEST,
+                      _client_server_thread, NULL, "client_udp_server") <= KERNEL_PID_UNDEF)
+    {
+        puts("error initializing thread");
+    }
     /* start shell */
+    puts("All up, running the shell now");
     char line_buf[SHELL_DEFAULT_BUFSIZE];
     shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
