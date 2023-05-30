@@ -1,24 +1,3 @@
-/*
- * Copyright (C) 2015 Freie Universität Berlin
- *
- * This file is subject to the terms and conditions of the GNU Lesser
- * General Public License v2.1. See the file LICENSE in the top level
- * directory for more details.
- */
-
-/**
- * @ingroup     examples
- * @{
- *
- * @file
- * @brief       Example application for demonstrating RIOT's MQTT-SN library
- *              emCute
- *
- * @author      Hauke Petersen <hauke.petersen@fu-berlin.de>
- *
- * @}
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -35,31 +14,20 @@
 #include <unistd.h>
 
 #include "net/netif.h" /* for resolving ipv6 scope */
+#include "net/gnrc/rpl.h"
+#include "net/gnrc/rpl/dodag.h"
+#include "net/gnrc/rpl/structs.h"
 
 #ifndef EMCUTE_ID
 #define EMCUTE_ID ("gertrud")
-#endif
-
-#ifndef CLIENT_SERVER_PORT
-#define CLIENT_SERVER_PORT (1234U)
 #endif
 #define EMCUTE_PRIO (THREAD_PRIORITY_MAIN - 1)
 
 #define NUMOFSUBS (16U)
 #define TOPIC_MAXLEN (64U)
 
-#define SERVER_MSG_QUEUE_SIZE   (8)
-#define CLIENT_SERVER_BUFFER_SIZE      (64)
-
-
-static char client_server_buffer[CLIENT_SERVER_BUFFER_SIZE];
-static msg_t client_server_msg_queue[SERVER_MSG_QUEUE_SIZE];
-//static kernel_pid_t client_server_pid;
-static int client_server_socket;
-
-static char client_server_stack[THREAD_STACKSIZE_DEFAULT];
-
 static char stack[THREAD_STACKSIZE_DEFAULT];
+static char client_stack[THREAD_STACKSIZE_DEFAULT];
 static msg_t queue[8];
 
 static emcute_sub_t subscriptions[NUMOFSUBS];
@@ -310,48 +278,156 @@ static const shell_command_t shell_commands[] = {
     {"will", "register a last will", cmd_will},
     {NULL, NULL, NULL}};
 
-static void *_client_server_thread(void *args)
+#define CLIENT_BUFFER_SIZE (128)
+static char client_buffer[CLIENT_BUFFER_SIZE];
+
+#if 0
+static int udp_send(char *addr_str, uint16_t port, char *data)
 {
-    struct sockaddr_in6 server_addr;
-    uint16_t port;
-    msg_init_queue(client_server_msg_queue, SERVER_MSG_QUEUE_SIZE);
-    client_server_socket = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
-    (void)args;
-    port = CLIENT_SERVER_PORT;
-    server_addr.sin6_family = AF_INET6;
-    memset(&server_addr.sin6_addr, 0, sizeof(server_addr.sin6_addr));
-    server_addr.sin6_port = htons(port);
-    if (client_server_socket < 0)
-    {
+    struct sockaddr_in6 src, dst;
+    size_t data_len = strlen(data);
+    int s;
+    src.sin6_family = AF_INET6;
+    dst.sin6_family = AF_INET6;
+    memset(&src.sin6_addr, 0, sizeof(src.sin6_addr));
+    /* parse interface id */
+#ifdef SOCK_HAS_IPV6
+    char *iface;
+    iface = ipv6_addr_split_iface(addr_str); /* also removes interface id */
+    if (iface) {
+        netif_t *netif = netif_get_by_name(iface);
+        if (netif) {
+            dst.sin6_scope_id = (uint32_t) netif_get_id(netif);
+        }
+        else {
+            printf("unknown network interface %s\n", iface);
+        }
+    }
+#endif /* SOCK_HAS_IPV6 */
+    /* parse destination address */
+    if (inet_pton(AF_INET6, addr_str, &dst.sin6_addr) != 1) {
+        puts("Error: unable to parse destination address");
+        return 1;
+    }
+
+    dst.sin6_port = htons(port);
+    src.sin6_port = htons(port);
+    s = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) {
         puts("error initializing socket");
-        client_server_socket = 0;
-        return NULL;
+        return 1;
     }
-    if (bind(client_server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    if (sendto(s, data, data_len, 0, (struct sockaddr *)&dst, sizeof(dst)) < 0) {
+        puts("could not send");
+    }
+    else {
+	printf("Successfully sending, waiting response...\n");
+	int res;
+	socklen_t dst_len = sizeof(struct sockaddr_in6);
+	if ((res = recvfrom(s, client_buffer, sizeof(client_buffer), 0,
+                            (struct sockaddr *)&dst, &dst_len)) < 0) {
+        	puts("Error on receive");
+        }
+        else if (res == 0) {
+            puts("Peer did shut down");
+        }
+        else {
+            printf("Received data: ");
+            puts(client_buffer);
+        }
+    }
+
+    close(s);
+    return 0;
+}
+
+#define CLIENT_MSG_QUEUE_SIZE (8)
+static msg_t client_msg_queue[CLIENT_MSG_QUEUE_SIZE];
+
+static void *client_thread(void *args)
+{
+	(void)args;
+	msg_init_queue(client_msg_queue, CLIENT_MSG_QUEUE_SIZE);
+	kernel_pid_t iface_pid = 6;
+	if (gnrc_netif_get_by_pid(iface_pid) == NULL) {
+        	printf("unknown interface specified\n");
+       		return NULL;
+    	}
+
+	gnrc_rpl_init(iface_pid);
+	printf("successfully initialized RPL on interface %d\n", iface_pid);
+
+        while(1){
+		sleep(5);
+                (void)udp_send("2001:db8::1", 8000, "gateway_ipv6_request");
+        }
+	return NULL;
+}
+#endif
+
+static void *client_thread(void *args)
+{
+    (void)args;
+
+    kernel_pid_t iface_pid = 6;
+    if (gnrc_netif_get_by_pid(iface_pid) == NULL)
     {
-        client_server_socket = -1;
-        puts("error binding socket");
+        printf("unknown interface specified\n");
         return NULL;
     }
-    printf("Success: started UDP server on port %" PRIu16 "\n", port);
+
+    gnrc_rpl_init(iface_pid);
+    printf("successfully initialized RPL on interface %d\n", iface_pid);
+
+    sock_udp_ep_t local = SOCK_IPV6_EP_ANY;
+    sock_udp_t sock;
+
+    local.port = 0xabcd;
+
+    if (sock_udp_create(&sock, &local, NULL, 0) < 0)
+    {
+        puts("Error creating UDP sock");
+        return NULL;
+    }
+
+    sock_udp_ep_t remote = {.family = AF_INET6};
+    ssize_t res;
+
+    remote.port = 8000;
+    // Parsing IPv6 Address from String
+    if (ipv6_addr_from_str((ipv6_addr_t *)&remote.addr.ipv6, "2001:db8::1") == NULL)
+    {
+        printf("error parsing IPv6 address\n");
+        return NULL;
+    }
+
     while (1)
     {
-        int res;
-        struct sockaddr_in6 src;
-        socklen_t src_len = sizeof(struct sockaddr_in6);
-        if ((res = recvfrom(client_server_socket, client_server_buffer, sizeof(client_server_buffer), 0,
-                            (struct sockaddr *)&src, &src_len)) < 0)
+        sleep(5);
+        if (sock_udp_send(&sock, "gateway_ipv6_request", sizeof("gateway_ipv6_request"), &remote) < 0)
         {
-            puts("Error on receive");
-        }
-        else if (res == 0)
-        {
-            puts("Peer did shut down");
+            puts("Error sending message");
         }
         else
         {
-            printf("Received data: ");
-            puts(client_server_buffer);
+            printf("Successfully sending, waiting response...\n");
+            if ((res = sock_udp_recv(&sock, client_buffer, sizeof(client_buffer), 1 * US_PER_SEC,
+                                     NULL)) < 0)
+            {
+                if (res == -ETIMEDOUT)
+                {
+                    puts("Timed out");
+                }
+                else
+                {
+                    puts("Error receiving message");
+                }
+            }
+            else
+            {
+                printf("Received data: ");
+                puts(client_buffer);
+            }
         }
     }
     return NULL;
@@ -373,15 +449,14 @@ int main(void)
     thread_create(stack, sizeof(stack), EMCUTE_PRIO, 0,
                   emcute_thread, NULL, "emcute");
 
-    /* start server (which means registering pktdump for the chosen port) */
-    if (thread_create(client_server_stack, sizeof(client_server_stack), THREAD_PRIORITY_MAIN - 1,
+    if (thread_create(client_stack, sizeof(client_stack), THREAD_PRIORITY_MAIN - 1,
                       THREAD_CREATE_STACKTEST,
-                      _client_server_thread, NULL, "client_udp_server") <= KERNEL_PID_UNDEF)
+                      client_thread, NULL, "UDP client") <= KERNEL_PID_UNDEF)
     {
         puts("error initializing thread");
     }
+
     /* start shell */
-    puts("All up, running the shell now");
     char line_buf[SHELL_DEFAULT_BUFSIZE];
     shell_run(shell_commands, line_buf, SHELL_DEFAULT_BUFSIZE);
 
