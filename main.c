@@ -404,6 +404,25 @@ static void *client_thread(void *args)
     while (1)
     {
         sleep(5);
+        uint8_t instance_id = 1; // O ID da instância que você deseja obter.
+
+        gnrc_rpl_instance_t *instance = gnrc_rpl_instance_get(instance_id);
+        if (instance != NULL)
+        {
+            // Buffer para armazenar a string do endereço IPv6.
+            char addr_str[IPV6_ADDR_MAX_STR_LEN];
+
+            // Converte o endereço IPv6 para uma string.
+            ipv6_addr_to_str(addr_str, &(instance->dodag.dodag_id), IPV6_ADDR_MAX_STR_LEN);
+
+            // Imprime o endereço IPv6.
+            printf("DODAG IPv6 address: %s\n", addr_str);
+        }
+        else
+        {
+            printf("Instance or DODAG not found.\n");
+        }
+
         if (sock_udp_send(&sock, "gateway_ipv6_request", sizeof("gateway_ipv6_request"), &remote) < 0)
         {
             puts("Error sending message");
