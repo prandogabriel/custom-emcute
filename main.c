@@ -411,12 +411,38 @@ static void *client_thread(void *args)
         {
             // Buffer para armazenar a string do endereço IPv6.
             char addr_str[IPV6_ADDR_MAX_STR_LEN];
+            char new_addr_str[43]; // Aumente o tamanho para 43 para acomodar "::1".
 
             // Converte o endereço IPv6 para uma string.
             ipv6_addr_to_str(addr_str, &(instance->dodag.dodag_id), IPV6_ADDR_MAX_STR_LEN);
 
-            // Imprime o endereço IPv6.
-            printf("DODAG IPv6 address: %s\n", addr_str);
+            // Conta até o terceiro ':'.
+            int count = 0;
+            for (char *c = addr_str; *c != '\0'; c++)
+            {
+                if (*c == ':')
+                {
+                    count++;
+                    if (count == 3)
+                    {
+                        *c = '\0'; // Termina a string após o terceiro ':'.
+                        break;
+                    }
+                }
+            }
+
+            // Certifique-se de que o novo endereço não excederá o tamanho do buffer.
+            if (strlen(addr_str) + 4 < sizeof(new_addr_str))
+            {
+                // Formata a nova string de endereço IPv6.
+                sprintf(new_addr_str, "%s::1", addr_str);
+                // Imprime a nova string de endereço IPv6.
+                printf("New DODAG IPv6 address: %s\n", new_addr_str);
+            }
+            else
+            {
+                printf("Error: Buffer overflow.\n");
+            }
         }
         else
         {
